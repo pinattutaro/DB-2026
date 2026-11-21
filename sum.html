@@ -60,6 +60,11 @@
     .q-stamp-correct { background: var(--ok); }
     .q-stamp-wrong { background: var(--ng); }
 
+    .ng-empty { color: var(--muted); text-align: center; padding: 2.5em 1em; }
+
+    /* 一時的に上部ボタン群を非表示 */
+    #q-answer, #q-ok, #q-ng, #q-skip, #q-shuffle, #q-reset { display: none; }
+
     </style>
     <title>Yaruzo</title>
   </head>
@@ -73,6 +78,7 @@
       <div class="view-switch" role="tablist">
         <button type="button" id="view-list" class="active" role="tab" aria-selected="true">一覧</button>
         <button type="button" id="view-quiz" role="tab" aria-selected="false">単語帳</button>
+        <button type="button" id="view-ng" role="tab" aria-selected="false">不正解のみ</button>
       </div>
 
       <section id="list-view">
@@ -4304,7 +4310,7 @@ var QUESTIONS = [{"id": "lecture01-定着確認#0", "num": "2.0.1", "ctx": "2 �
   });
 
   var listView = $("list-view"), quizView = $("quiz-view");
-  var viewList = $("view-list"), viewQuiz = $("view-quiz");
+  var viewList = $("view-list"), viewQuiz = $("view-quiz"), viewNg = $("view-ng");
 
   // ---- 一覧ビュー ----
   var listSections = document.querySelectorAll("#list-view main h2[data-number]");
@@ -4340,12 +4346,20 @@ var QUESTIONS = [{"id": "lecture01-定着確認#0", "num": "2.0.1", "ctx": "2 �
   var state = {};
   try { state = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { state = {}; }
   var results = state.results || {};
-  var qIdx = typeof state.idx === "number" ? state.idx : 0;
   var shuffle = !!state.shuffle;
   var flipped = false, hasBack = false;
-  qIdx = Math.max(0, Math.min(qIdx, QUESTIONS.length - 1));
+  var deckMode = "all";
+  var qIdxAll = typeof state.idxAll === "number" ? state.idxAll : (typeof state.idx === "number" ? state.idx : 0);
+  var qIdxNg = typeof state.idxNg === "number" ? state.idxNg : 0;
+  qIdxAll = Math.max(0, Math.min(qIdxAll, QUESTIONS.length - 1));
+  function qi() { return deckMode === "ng" ? qIdxNg : qIdxAll; }
+  function setQi(i) { if (deckMode === "ng") qIdxNg = i; else qIdxAll = i; }
 
-  function save() { localStorage.setItem(KEY, JSON.stringify({ results: results, idx: qIdx, shuffle: shuffle })); }
+  function deck() {
+    return deckMode === "ng" ? QUESTIONS.filter(function (q) { return results[q.id] === "ng"; }) : QUESTIONS;
+  }
+
+  function save() { localStorage.setItem(KEY, JSON.stringify({ results: results, idxAll: qIdxAll, idxNg: qIdxNg, shuffle: shuffle })); }
   function scoreInfo() {
     var answered = 0, ok = 0;
     for (var k in results) { answered++; if (results[k] === "ok") ok++; }
@@ -4414,7 +4428,25 @@ var QUESTIONS = [{"id": "lecture01-定着確認#0", "num": "2.0.1", "ctx": "2 �
   // ---- 描画 ----
   function renderQuiz() {
     resetDrag();
-    var q = QUESTIONS[qIdx];
+    var dq = deck();
+    if (qi() >= dq.length) setQi(0);
+    if (!dq.length) {
+      qTitle.textContent = "";
+      qFront.innerHTML = '<p class="ng-empty">まだ不正解の問題はありません。<br>単語帳で「不正解」にした問題がここに表示されます。</p>';
+      qBack.innerHTML = "";
+      hasBack = false;
+      flipped = false;
+      qInner.classList.remove("flipped");
+      qAnswer.disabled = true;
+      qAnswer.textContent = "答えを見る";
+      qProgress.textContent = "0 / 0";
+      var sc0 = scoreInfo();
+      qScore.textContent = "正答率 " + (sc0.answered ? Math.round(100 * sc0.ok / sc0.answered) : 0) + "%（" + sc0.ok + " / " + sc0.answered + "）";
+      qHint.textContent = "";
+      window.scrollTo(0, 0);
+      return;
+    }
+    var q = dq[qi()];
     qTitle.textContent = q.num + " " + (q.ctx || "定着確認");
     qFront.innerHTML = q.front;
     qBack.innerHTML = q.back;
@@ -4423,7 +4455,7 @@ var QUESTIONS = [{"id": "lecture01-定着確認#0", "num": "2.0.1", "ctx": "2 �
     qInner.classList.remove("flipped");
     qAnswer.disabled = !hasBack;
     qAnswer.textContent = "答えを見る";
-    qProgress.textContent = (qIdx + 1) + " / " + QUESTIONS.length;
+    qProgress.textContent = (qi() + 1) + " / " + dq.length;
     var sc = scoreInfo();
     qScore.textContent = "正答率 " + (sc.answered ? Math.round(100 * sc.ok / sc.answered) : 0) + "%（" + sc.ok + " / " + sc.answered + "）";
     if (hasBack) {
@@ -4443,14 +4475,29 @@ var QUESTIONS = [{"id": "lecture01-定着確認#0", "num": "2.0.1", "ctx": "2 �
     qAnswer.textContent = flipped ? "問題に戻る" : "答えを見る";
   }
 
-  function grade(r) { results[QUESTIONS[qIdx].id] = r; save(); next(); }
-  function next() {
-    if (shuffle && QUESTIONS.length > 1) {
-      var n;
-      do { n = Math.floor(Math.random() * QUESTIONS.length); } while (n === qIdx);
-      qIdx = n;
+  function grade(r) {
+    var dq = deck();
+    var id = dq[qi()].id;
+    results[id] = r;
+    save();
+    if (deckMode === "ng") {
+      var d2 = deck();
+      if (!d2.length) { setQi(0); }
+      else if (r === "ng") { setQi((qi() + 1) % d2.length); }
+      else { setQi(Math.min(qi(), d2.length - 1)); }
+      renderQuiz();
     } else {
-      qIdx = (qIdx + 1) % QUESTIONS.length;
+      next();
+    }
+  }
+  function next() {
+    var dq = deck();
+    if (shuffle && dq.length > 1) {
+      var n;
+      do { n = Math.floor(Math.random() * dq.length); } while (n === qi());
+      setQi(n);
+    } else {
+      setQi((qi() + 1) % dq.length);
     }
     save(); renderQuiz();
   }
@@ -4465,7 +4512,7 @@ var QUESTIONS = [{"id": "lecture01-定着確認#0", "num": "2.0.1", "ctx": "2 �
     qShuffle.classList.toggle("primary", shuffle);
   });
   qReset.addEventListener("click", function () {
-    if (confirm("演習の進捗（正答率）をリセットしますか？")) { results = {}; qIdx = 0; save(); renderQuiz(); }
+    if (confirm("演習の進捗（正答率）をリセットしますか？")) { results = {}; qIdxAll = 0; qIdxNg = 0; save(); renderQuiz(); }
   });
 
   // キーボード：スペース＝反転、←＝不正解、→＝正解、Enter＝次へ
@@ -4481,15 +4528,18 @@ var QUESTIONS = [{"id": "lecture01-定着確認#0", "num": "2.0.1", "ctx": "2 �
 
   // ---- ビュー切替 ----
   function showView(v) {
-    var isList = v === "list";
-    listView.hidden = !isList;
-    quizView.hidden = isList;
-    viewList.classList.toggle("active", isList);
-    viewQuiz.classList.toggle("active", !isList);
-    if (!isList) renderQuiz();
+    listView.hidden = (v !== "list");
+    quizView.hidden = (v === "list");
+    viewList.classList.toggle("active", v === "list");
+    viewQuiz.classList.toggle("active", v === "quiz");
+    viewNg.classList.toggle("active", v === "ng");
+    if (v === "list") return;
+    deckMode = v === "ng" ? "ng" : "all";
+    renderQuiz();
   }
   viewList.addEventListener("click", function () { showView("list"); });
   viewQuiz.addEventListener("click", function () { showView("quiz"); });
+  viewNg.addEventListener("click", function () { showView("ng"); });
 
   qShuffle.textContent = "シャッフル: " + (shuffle ? "ON" : "OFF");
   qShuffle.classList.toggle("primary", shuffle);
